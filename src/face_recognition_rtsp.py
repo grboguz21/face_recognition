@@ -2,10 +2,19 @@ import cv2
 import time
 import datetime
 import threading
+import argparse
 import numpy as np
 from pathlib import Path
 from insightface.app import FaceAnalysis
 from insightface.utils import face_align
+
+# ════════════════════════════════════════════════════════════
+# ARGÜMANLAR
+# ════════════════════════════════════════════════════════════
+parser = argparse.ArgumentParser()
+parser.add_argument("--kayit", action="store_true", help="AVI olarak kaydet")
+args = parser.parse_args()
+KAYIT_AKTIF = args.kayit
 
 # ════════════════════════════════════════════════════════════
 # CW ENERJİ RENK PALETİ
@@ -28,7 +37,7 @@ LOG_ARALIK      = 5.0
 # ROI — orijinal 2560x1440 koordinatları
 # ════════════════════════════════════════════════════════════
 ROI_CAM1 = np.array([
-    [1360, 440], [42, 284], [18, 1422], [2442, 1424], [1788, 22], [1390, 16]
+    [8, 1430], [6, 28], [1952, 16], [2542, 1434]
 ], np.int32)
 
 ROI_CAM2 = np.array([
@@ -49,6 +58,7 @@ LOG_DOSYA = Path("face_log.txt")
 log_file  = open(LOG_DOSYA, "a", encoding="utf-8")
 log_file.write(f"\n{'='*50}\n")
 log_file.write(f"Oturum basladi: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+log_file.write(f"Kayit modu   : {'AKTIF' if KAYIT_AKTIF else 'KAPALI'}\n")
 log_file.write(f"{'='*50}\n")
 log_file.flush()
 
@@ -94,7 +104,8 @@ if faces_db.exists():
             registry[name] = mean_emb / np.linalg.norm(mean_emb)
             print(f"Yuklendi: {name} ({len(embeddings)} fotograf)")
 
-print(f"\nToplam {len(registry)} kisi yuklendi. Baslaniyor...\n")
+print(f"\nToplam {len(registry)} kisi yuklendi.")
+print(f"Kayit modu: {'AKTIF (--kayit)' if KAYIT_AKTIF else 'KAPALI'}\n")
 
 
 # ════════════════════════════════════════════════════════════
@@ -123,8 +134,8 @@ def roi_ciz(frame, roi_poly, aktif=False):
         kenar = (80, 240, 140)
         kk    = 2
     else:
-        alpha = 0.20          # 0.06 → 0.12 yaptık, daha belirgin dolgu
-        renk  = CW_MAVI       # CW_ACIK_MAVI yerine koyu mavi — daha az göz yakan
+        alpha = 0.12
+        renk  = CW_MAVI
         kenar = CW_ACIK_MAVI
         kk    = 1
 
@@ -144,7 +155,7 @@ def roi_ciz(frame, roi_poly, aktif=False):
             cv2.circle(frame, tuple(pt), 8, kenar, 1)
 
 
-def banner(frame, fps, n_kisi, n_roi, cam_id, kayit=True):
+def banner(frame, fps, n_kisi, n_roi, cam_id):
     h, w = frame.shape[:2]
     overlay = frame.copy()
     cv2.rectangle(overlay, (0, 0), (w, 56), CW_KOYU, -1)
@@ -169,8 +180,8 @@ def banner(frame, fps, n_kisi, n_roi, cam_id, kayit=True):
     blok(370, "REGISTERED", str(n_kisi),  CW_BEYAZ)
     blok(450, "IN ROI",     str(n_roi),   CW_YESIL if n_roi > 0 else (70,70,80))
 
-    # Kayıt göstergesi — sağ üstte nabız atan kırmızı nokta
-    if kayit:
+    # Kayıt göstergesi
+    if KAYIT_AKTIF:
         t      = time.time()
         parlak = abs(np.sin(t * 2.0)) > 0.5
         renk_r = (0, 0, 220) if parlak else (0, 0, 120)
@@ -291,9 +302,9 @@ def isle_kamera(cam_thread, cam_id, roi_orig, fps_state, log_list, son_log, writ
 
     roi_poly = roi_scaled(roi_orig, orig_w, orig_h, yeni_w, yeni_h)
 
-    mask            = np.zeros((yeni_h, yeni_w), dtype=np.uint8)
+    mask         = np.zeros((yeni_h, yeni_w), dtype=np.uint8)
     cv2.fillPoly(mask, [roi_poly], 255)
-    frame_masked    = frame.copy()
+    frame_masked = frame.copy()
     frame_masked[mask == 0] = 0
 
     aktif_yuz = 0
@@ -370,10 +381,9 @@ def isle_kamera(cam_thread, cam_id, roi_orig, fps_state, log_list, son_log, writ
     fps_state["fps"]       = fps
     fps_state["prev_time"] = now
 
-    banner(frame, fps, len(registry), aktif_yuz, cam_id, kayit=True)
+    banner(frame, fps, len(registry), aktif_yuz, cam_id)
     log_goster(frame, log_list)
 
-    # AVI'ye yaz
     if writer is not None:
         writer.write(frame)
 
@@ -391,7 +401,6 @@ cam2 = KameraThread(url2, cam_id=2)
 cam1.start()
 cam2.start()
 
-# İlk frame'i bekle — boyut için
 print("Ilk frame bekleniyor...")
 while True:
     f1 = cam1.get_frame()
@@ -403,8 +412,8 @@ while True:
 h1, w1 = f1.shape[:2]
 h2, w2 = f2.shape[:2]
 
-writer1 = writer_olustur(1, w1 // 2, h1 // 2)
-writer2 = writer_olustur(2, w2 // 2, h2 // 2)
+writer1 = writer_olustur(1, w1 // 2, h1 // 2) if KAYIT_AKTIF else None
+writer2 = writer_olustur(2, w2 // 2, h2 // 2) if KAYIT_AKTIF else None
 
 fps1 = {"fps": 0.0, "prev_time": time.time()}
 fps2 = {"fps": 0.0, "prev_time": time.time()}
@@ -431,9 +440,10 @@ try:
 finally:
     cam1.stop()
     cam2.stop()
-    writer1.release()
-    writer2.release()
+    if writer1 is not None: writer1.release()
+    if writer2 is not None: writer2.release()
     cv2.destroyAllWindows()
     log_file.write(f"\nOturum bitti: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
     log_file.close()
-    print("Kayitlar kaydedildi:", KAYIT_DIR)
+    if KAYIT_AKTIF:
+        print(f"Kayitlar kaydedildi: {KAYIT_DIR}")
