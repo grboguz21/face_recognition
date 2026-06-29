@@ -28,13 +28,19 @@ LOG_ARALIK      = 5.0
 # ROI — orijinal 2560x1440 koordinatları
 # ════════════════════════════════════════════════════════════
 ROI_CAM1 = np.array([
-    [1776, 0], [2554, 1432], [12, 1428], [12, 338]
+    [1360, 440], [42, 284], [18, 1422], [2442, 1424], [1788, 22], [1390, 16]
 ], np.int32)
 
 ROI_CAM2 = np.array([
     [2542, 1006], [1306, 244], [1104, 240], [1070, 20],
     [480, 14], [14, 858], [12, 1426], [2522, 1418]
 ], np.int32)
+
+# ════════════════════════════════════════════════════════════
+# KAYIT KLASÖRÜ
+# ════════════════════════════════════════════════════════════
+KAYIT_DIR = Path("recordings")
+KAYIT_DIR.mkdir(exist_ok=True)
 
 # ════════════════════════════════════════════════════════════
 # LOG DOSYASI
@@ -111,15 +117,14 @@ def koseli_cerceve(frame, x1, y1, x2, y2, color, kalinlik=2, uzunluk=18):
 
 def roi_ciz(frame, roi_poly, aktif=False):
     t = time.time()
-
     if aktif:
         alpha = 0.10 + 0.10 * abs(np.sin(t * 3.0))
         renk  = (60, 220, 120)
         kenar = (80, 240, 140)
         kk    = 2
     else:
-        alpha = 0.06
-        renk  = CW_ACIK_MAVI
+        alpha = 0.20          # 0.06 → 0.12 yaptık, daha belirgin dolgu
+        renk  = CW_MAVI       # CW_ACIK_MAVI yerine koyu mavi — daha az göz yakan
         kenar = CW_ACIK_MAVI
         kk    = 1
 
@@ -139,7 +144,7 @@ def roi_ciz(frame, roi_poly, aktif=False):
             cv2.circle(frame, tuple(pt), 8, kenar, 1)
 
 
-def banner(frame, fps, n_kisi, n_roi, cam_id):
+def banner(frame, fps, n_kisi, n_roi, cam_id, kayit=True):
     h, w = frame.shape[:2]
     overlay = frame.copy()
     cv2.rectangle(overlay, (0, 0), (w, 56), CW_KOYU, -1)
@@ -156,13 +161,22 @@ def banner(frame, fps, n_kisi, n_roi, cam_id):
     cv2.line(frame, (280, 8), (280, 50), (50, 50, 60), 1)
 
     def blok(x, label, deger, renk):
-        cv2.putText(frame, label,     (x, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.32, (110,110,120), 1)
-        cv2.putText(frame, str(deger),(x, 46), cv2.FONT_HERSHEY_SIMPLEX, 0.70, renk, 2)
+        cv2.putText(frame, label,      (x, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.32, (110,110,120), 1)
+        cv2.putText(frame, str(deger), (x, 46), cv2.FONT_HERSHEY_SIMPLEX, 0.70, renk, 2)
         cv2.line(frame, (x+70, 8), (x+70, 50), (50,50,60), 1)
 
     blok(290, "FPS",        f"{fps:.1f}", CW_BEYAZ)
     blok(370, "REGISTERED", str(n_kisi),  CW_BEYAZ)
     blok(450, "IN ROI",     str(n_roi),   CW_YESIL if n_roi > 0 else (70,70,80))
+
+    # Kayıt göstergesi — sağ üstte nabız atan kırmızı nokta
+    if kayit:
+        t      = time.time()
+        parlak = abs(np.sin(t * 2.0)) > 0.5
+        renk_r = (0, 0, 220) if parlak else (0, 0, 120)
+        cv2.circle(frame, (w - 24, 20), 7, renk_r, -1)
+        cv2.putText(frame, "REC", (w - 52, 24),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 0, 200), 1)
 
 
 def log_goster(frame, log_list):
@@ -252,9 +266,21 @@ class KameraThread(threading.Thread):
 
 
 # ════════════════════════════════════════════════════════════
+# VIDEO WRITER OLUŞTUR
+# ════════════════════════════════════════════════════════════
+def writer_olustur(cam_id, w, h, fps=15):
+    zaman     = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    dosya_adi = KAYIT_DIR / f"cam{cam_id}_{zaman}.avi"
+    fourcc    = cv2.VideoWriter_fourcc(*"XVID")
+    writer    = cv2.VideoWriter(str(dosya_adi), fourcc, fps, (w, h))
+    print(f"[CAM {cam_id}] Kayit basliyor: {dosya_adi}")
+    return writer
+
+
+# ════════════════════════════════════════════════════════════
 # KAMERA İŞLEME
 # ════════════════════════════════════════════════════════════
-def isle_kamera(cam_thread, cam_id, roi_orig, fps_state, log_list, son_log):
+def isle_kamera(cam_thread, cam_id, roi_orig, fps_state, log_list, son_log, writer):
     frame = cam_thread.get_frame()
     if frame is None:
         return None, fps_state
@@ -265,10 +291,9 @@ def isle_kamera(cam_thread, cam_id, roi_orig, fps_state, log_list, son_log):
 
     roi_poly = roi_scaled(roi_orig, orig_w, orig_h, yeni_w, yeni_h)
 
-    # Sadece ROI içi modele ver
-    mask                = np.zeros((yeni_h, yeni_w), dtype=np.uint8)
+    mask            = np.zeros((yeni_h, yeni_w), dtype=np.uint8)
     cv2.fillPoly(mask, [roi_poly], 255)
-    frame_masked        = frame.copy()
+    frame_masked    = frame.copy()
     frame_masked[mask == 0] = 0
 
     aktif_yuz = 0
@@ -307,7 +332,6 @@ def isle_kamera(cam_thread, cam_id, roi_orig, fps_state, log_list, son_log):
 
         print(f"  det_score: {face.det_score:.3f} | blur: {blur_val:.1f} | {best_name} ({best_score:.3f})")
 
-        # Loglama
         simdi   = time.time()
         log_key = f"{cam_id}_{best_name}"
         gecen   = (simdi - son_log[log_key]) if log_key in son_log else (LOG_ARALIK + 1)
@@ -325,7 +349,6 @@ def isle_kamera(cam_thread, cam_id, roi_orig, fps_state, log_list, son_log):
             log_file.write(f"[{tarih_saat_str}] CAM {cam_id} | {best_name} | skor: {best_score:.3f}\n")
             log_file.flush()
 
-        # Çizim
         color = CW_YESIL if best_name != "Unknown" else CW_KIRMIZI
         koseli_cerceve(frame, x1, y1, x2, y2, color)
 
@@ -340,7 +363,6 @@ def isle_kamera(cam_thread, cam_id, roi_orig, fps_state, log_list, son_log):
         for kp in face.kps.astype(int):
             cv2.circle(frame, tuple(kp), 3, CW_ACIK_MAVI, -1)
 
-    # ROI çizimi — aktif_yuz belli olduktan sonra
     roi_ciz(frame, roi_poly, aktif=(aktif_yuz > 0))
 
     now  = time.time()
@@ -348,8 +370,12 @@ def isle_kamera(cam_thread, cam_id, roi_orig, fps_state, log_list, son_log):
     fps_state["fps"]       = fps
     fps_state["prev_time"] = now
 
-    banner(frame, fps, len(registry), aktif_yuz, cam_id)
+    banner(frame, fps, len(registry), aktif_yuz, cam_id, kayit=True)
     log_goster(frame, log_list)
+
+    # AVI'ye yaz
+    if writer is not None:
+        writer.write(frame)
 
     return frame, fps_state
 
@@ -365,6 +391,21 @@ cam2 = KameraThread(url2, cam_id=2)
 cam1.start()
 cam2.start()
 
+# İlk frame'i bekle — boyut için
+print("Ilk frame bekleniyor...")
+while True:
+    f1 = cam1.get_frame()
+    f2 = cam2.get_frame()
+    if f1 is not None and f2 is not None:
+        break
+    time.sleep(0.1)
+
+h1, w1 = f1.shape[:2]
+h2, w2 = f2.shape[:2]
+
+writer1 = writer_olustur(1, w1 // 2, h1 // 2)
+writer2 = writer_olustur(2, w2 // 2, h2 // 2)
+
 fps1 = {"fps": 0.0, "prev_time": time.time()}
 fps2 = {"fps": 0.0, "prev_time": time.time()}
 
@@ -374,9 +415,11 @@ shared_slog = {}
 try:
     while True:
         frame1, fps1 = isle_kamera(cam1, cam_id=1, roi_orig=ROI_CAM1,
-                                   fps_state=fps1, log_list=shared_log, son_log=shared_slog)
+                                   fps_state=fps1, log_list=shared_log,
+                                   son_log=shared_slog, writer=writer1)
         frame2, fps2 = isle_kamera(cam2, cam_id=2, roi_orig=ROI_CAM2,
-                                   fps_state=fps2, log_list=shared_log, son_log=shared_slog)
+                                   fps_state=fps2, log_list=shared_log,
+                                   son_log=shared_slog, writer=writer2)
 
         if frame1 is not None:
             cv2.imshow("CAM 1 - CW ENERJI", frame1)
@@ -388,6 +431,9 @@ try:
 finally:
     cam1.stop()
     cam2.stop()
+    writer1.release()
+    writer2.release()
     cv2.destroyAllWindows()
     log_file.write(f"\nOturum bitti: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
     log_file.close()
+    print("Kayitlar kaydedildi:", KAYIT_DIR)
